@@ -214,10 +214,10 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
     @Volatile
     private var querying = false
 
-    @Synchronized
     // FastPath: 事件触发时发现引擎忙，记录待处理数，完成后立即再次触发（不丢弃事件）
     private var pendingQueryCount = 0
 
+    @Synchronized
     private fun startQueryJob(
         byEvent: A11yEvent? = null,
         byForced: Boolean = false,
