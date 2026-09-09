@@ -28,13 +28,16 @@ jobs:
           cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY }}
 
       - name: write gkd keystore
-        if: ${{ secrets.GKD_STORE_FILE_BASE64 != '' }}
+        if: ${{ env.GKD_STORE_B64 != '' }}
+        env:
+          GKD_STORE_B64: ${{ secrets.GKD_STORE_FILE_BASE64 }}
         run: echo ${{ secrets.GKD_STORE_FILE_BASE64 }} | base64 --decode > ${{ github.workspace }}/gkd.jks
 
       - name: assemble gkd release (signed)
-        if: ${{ secrets.GKD_STORE_FILE_BASE64 != '' }}
+        if: ${{ env.GKD_STORE_B64 != '' }}
         run: ./gradlew :gkd-app:assembleGkdRelease
         env:
+          GKD_STORE_B64: ${{ secrets.GKD_STORE_FILE_BASE64 }}
           GKD_GITHUB_COOKIE: ${{ secrets.GKD_GITHUB_COOKIE }}
           GKD_API_AUTH_TOKEN: ${{ secrets.GKD_API_AUTH_TOKEN }}
           GKD_STORE_FILE: ${{ github.workspace }}/gkd.jks
@@ -44,7 +47,7 @@ jobs:
           GKD_RENAME_APK_FLAG: "1"
 
       - name: assemble gkd release (debug-key fallback)
-        if: ${{ secrets.GKD_STORE_FILE_BASE64 == '' }}
+        if: ${{ env.GKD_STORE_B64 == '' }}
         run: ./gradlew :gkd-app:assembleGkdRelease
 
       - uses: actions/upload-artifact@v7
