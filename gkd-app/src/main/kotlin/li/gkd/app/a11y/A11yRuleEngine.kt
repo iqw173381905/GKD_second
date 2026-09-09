@@ -56,14 +56,22 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
     }
 
     val safeActiveWindow: AccessibilityNodeInfo?
-        get() = try {
-            // 某些应用耗时 554ms
-            // java.lang.SecurityException: Call from user 0 as user -2 without permission INTERACT_ACROSS_USERS or INTERACT_ACROSS_USERS_FULL not allowed.
-            service.windowNodeInfo?.setGeneratedTime()
-        } catch (_: Throwable) {
-            null
-        }.apply {
-            a11yContext.rootCache.value = this
+        get() {
+            val st = if (META.debuggable) System.currentTimeMillis() else 0L
+            val node = try {
+                // 某些应用耗时 554ms
+                // java.lang.SecurityException: Call from user 0 as user -2 without permission INTERACT_ACROSS_USERS or INTERACT_ACROSS_USERS_FULL not allowed.
+                service.windowNodeInfo?.setGeneratedTime()
+            } catch (_: Throwable) {
+                null
+            }
+            if (META.debuggable) {
+                val et = System.currentTimeMillis() - st
+                if (et > 50) Log.d("FastProbe", "safeActiveWindow fetch ${et}ms")
+            }
+            return node.apply {
+                a11yContext.rootCache.value = this
+            }
         }
 
     private val safeActiveWindowAppId: String?
@@ -215,7 +223,12 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
         if (!effective) return
         if (!storeFlow.value.enableMatch) return
         if (activityRuleFlow.value.currentRules.isEmpty()) return
-        if (querying) return
+        if (querying) {
+            if (META.debuggable) {
+                Log.d("FastProbe", "startQueryJob BUSY skip byEvent=${byEvent?.type ?: -1}")
+            }
+            return
+        }
         // 无障碍从零启动时获取 safeActiveWindow 非常耗时
         if (byEvent == null && service.justStarted && !hasOthersService) return checkFutureStartJob()
         scope.launchLogged(queryDispatcher) {
@@ -308,6 +321,7 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
             }
         }
         val activityRule = A11yState.currentRule
+        val qaStart = if (META.debuggable) System.currentTimeMillis() else 0L
         activityRule.currentRules.forEach { rule ->
             if (rule.status == RuleStatus.Status3 && rule.matchDelayJob.value == null) {
                 rule.matchDelayJob.value = scope.launch(actionDispatcher) {
@@ -340,6 +354,12 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
                 a11yContext.clearNodeCache(lastNode)
             }
         }
+        if (META.debuggable) {
+            Log.d(
+                "FastProbe",
+                "queryAction pre ${System.currentTimeMillis() - qaStart}ms src=${newEvents?.size ?: -1} lastNode=${lastNode != null} rules=${activityRule.priorityRules.size}"
+            )
+        }
         for (rule in activityRule.priorityRules) { // 规则数量有可能过多导致耗时过长
             if (!effective) return
             if (checkOutDate(activityRule, tempStateEvent)) break
@@ -369,7 +389,11 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
                 return
             }
             if (!matchApp) continue
+            val tQuery = if (META.debuggable) System.currentTimeMillis() else 0L
             val target = a11yContext.queryRule(rule, nodeVal) ?: continue
+            if (META.debuggable) {
+                Log.d("FastProbe", "query ${System.currentTimeMillis() - tQuery}ms")
+            }
             if (rule.checkDelay() && rule.actionDelayJob.value == null) {
                 rule.actionDelayJob.value = scope.launch(actionDispatcher) {
                     delay(rule.actionDelay.milliseconds)
@@ -380,7 +404,11 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
             }
             if (rule.status != RuleStatus.StatusOk) break
             if (checkOutDate(activityRule, tempStateEvent)) break
+            val tAct = if (META.debuggable) System.currentTimeMillis() else 0L
             val actionResult = rule.performAction(target)
+            if (META.debuggable) {
+                Log.d("FastProbe", "action ${System.currentTimeMillis() - tAct}ms ok=${actionResult.result}")
+            }
             if (actionResult.result) {
                 val topActivity = currentTopActivity
                 rule.trigger()
