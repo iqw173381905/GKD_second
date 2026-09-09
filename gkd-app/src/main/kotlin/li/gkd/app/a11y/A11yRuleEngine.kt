@@ -215,6 +215,9 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
     private var querying = false
 
     @Synchronized
+    // FastPath: 事件触发时发现引擎忙，记录待处理数，完成后立即再次触发（不丢弃事件）
+    private var pendingQueryCount = 0
+
     private fun startQueryJob(
         byEvent: A11yEvent? = null,
         byForced: Boolean = false,
@@ -224,8 +227,10 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
         if (!storeFlow.value.enableMatch) return
         if (activityRuleFlow.value.currentRules.isEmpty()) return
         if (querying) {
+            // FastPath: 引擎忙时不丢弃事件，只计数，完成后再触发
+            pendingQueryCount++
             if (META.debuggable) {
-                Log.d("FastProbe", "startQueryJob BUSY skip byEvent=${byEvent?.type ?: -1}")
+                Log.d("FastProbe", "startQueryJob BUSY queued pendingQueryCount=$pendingQueryCount byEvent=${byEvent?.type ?: -1}")
             }
             return
         }
@@ -243,12 +248,25 @@ class A11yRuleEngine(private val service: A11yCommonImpl) {
                 }
                 queryAction(byEvent, byForced, byDelayRule)
             } finally {
-                checkFutureStartJob()
+                val pending = pendingQueryCount
+                if (pendingQueryCount > 0) pendingQueryCount = 0  // 先清零，防止并发
+                querying = false
+                // FastPath: 有待处理事件时，50ms 后立即触发（不等待 checkFutureStartJob 的 300ms）
+                if (pending > 0) {
+                    if (META.debuggable) {
+                        Log.d("FastProbe", "FastPath resume $pending pending queries, immediate re-trigger")
+                    }
+                    scope.launch(actionDispatcher) {
+                        delay(50L)  // 极短延迟，等待 queryAction 释放资源
+                        startQueryJob()
+                    }
+                } else {
+                    checkFutureStartJob()
+                }
                 if (META.debuggable) {
                     val et = System.currentTimeMillis() - st
                     Log.d("A11yRuleEngine", "startQueryJob end $et ms")
                 }
-                querying = false
             }
         }
     }
